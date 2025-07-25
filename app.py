@@ -202,25 +202,32 @@ def extend_key():
 
 @app.route('/check_expired_keys', methods=['GET'])
 def check_expired_keys():
-    now = datetime.utcnow().isoformat()
+    now = datetime.utcnow()
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
         SELECT key, tier, credits, issued_to, created_at, expires_at
         FROM licenses
-        WHERE expires_at IS NOT NULL AND expires_at < ?
-    ''', (now,))
+        WHERE expires_at IS NOT NULL
+    ''')
     rows = cursor.fetchall()
     conn.close()
 
-    expired = [{
-        'key': row[0],
-        'tier': row[1],
-        'credits': row[2],
-        'issued_to': row[3],
-        'created_at': row[4],
-        'expires_at': row[5]
-    } for row in rows]
+    expired = []
+    for row in rows:
+        try:
+            exp_date = datetime.fromisoformat(row[5])
+            if exp_date < now:
+                expired.append({
+                    'key': row[0],
+                    'tier': row[1],
+                    'credits': row[2],
+                    'issued_to': row[3],
+                    'created_at': row[4],
+                    'expires_at': row[5]
+                })
+        except Exception:
+            continue
 
     return jsonify({'expired_keys': expired})
 
