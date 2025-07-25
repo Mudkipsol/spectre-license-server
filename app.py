@@ -142,6 +142,22 @@ def view_keys():
 
     return jsonify({'keys': keys})
 
+@app.route('/delete_key', methods=['POST'])
+def delete_key():
+    data = request.get_json()
+    license_key = data.get('key')
+
+    if not license_key:
+        return jsonify({'error': 'Missing license key'}), 400
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM licenses WHERE key = ?', (license_key,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({'message': 'Key deleted successfully'})
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=True, host='0.0.0.0')
