@@ -12,8 +12,8 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # Drop and recreate table (if needed during dev)
-    cursor.execute('DROP TABLE IF EXISTS licenses')
+    cursor.execute('DROP TABLE IF EXISTS licenses')  # Optional: only if you're fine resetting
+
     cursor.execute('''
         CREATE TABLE licenses (
             key TEXT PRIMARY KEY,
@@ -21,7 +21,8 @@ def init_db():
             tier TEXT DEFAULT 'lite',
             issued_to TEXT,
             created_at TEXT,
-            expires_at TEXT
+            expires_at TEXT,
+            hwid TEXT
         )
     ''')
     conn.commit()
@@ -43,22 +44,42 @@ def index():
 def verify_key():
     data = request.json
     user_key = data.get('key', '').strip()
+    hwid = data.get('hwid', '').strip()
+
     if user_key == MASTER_KEY:
         return jsonify({'valid': True, 'tier': 'master', 'credits': 999999})
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('SELECT tier, credits, expires_at FROM licenses WHERE key = ?', (user_key,))
+    cursor.execute('SELECT tier, credits, expires_at, hwid FROM licenses WHERE key = ?', (user_key,))
     result = cursor.fetchone()
-    conn.close()
 
-    if result:
-        tier, credits, expires_at = result
-        if expires_at and datetime.fromisoformat(expires_at) < datetime.utcnow():
-            return jsonify({'valid': False, 'reason': 'License expired'}), 403
-        return jsonify({'valid': True, 'tier': tier, 'credits': credits})
-    else:
-        return jsonify({'valid': False}), 403
+    if not result:
+        conn.close()
+        return jsonify({'valid': False, 'reason': 'Key not found'}), 403
+
+    tier, credits, expires_at, stored_hwid = result
+
+    # Check expiration
+    if expires_at and datetime.fromisoformat(expires_at) < datetime.utcnow():
+        conn.close()
+        return jsonify({'valid': False, 'reason': 'License expired'}), 403
+
+    # If no HWID stored yet, bind it to current request
+    if not stored_hwid:
+        cursor.execute('UPDATE licenses SET hwid = ? WHERE key = ?', (hwid, user_key))
+        conn.commit()
+        conn.close()
+        return jsonify({'valid': True, 'tier': tier, 'credits': credits, 'bound': True})
+
+    # HWID mismatch
+    if hwid != stored_hwid:
+        conn.close()
+        return jsonify({'valid': False, 'reason': 'HWID mismatch'}), 403
+
+    # Valid key and HWID match
+    conn.close()
+    return jsonify({'valid': True, 'tier': tier, 'credits': credits})
 
 @app.route('/generate_key', methods=['GET', 'POST'])
 def generate_key():
