@@ -91,6 +91,7 @@ def edit_key():
     new_tier = data.get('tier')
     new_credits = data.get('credits')
     new_issued_to = data.get('issued_to')
+    new_expires_at = data.get('expires_at')
 
     if not key:
         return jsonify({"error": "Missing 'key' field"}), 400
@@ -110,6 +111,9 @@ def edit_key():
     if new_issued_to:
         updates.append("issued_to = ?")
         params.append(new_issued_to)
+    if new_expires_at:
+        updates.append("expires_at = ?")
+        params.append(new_expires_at)
 
     if not updates:
         return jsonify({"error": "No fields to update"}), 400
