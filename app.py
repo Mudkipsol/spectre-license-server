@@ -156,7 +156,7 @@ def view_keys():
     if tier_filter:
         cursor.execute('SELECT key, tier, credits, issued_to, created_at, expires_at FROM licenses WHERE tier = ?', (tier_filter,))
     else:
-        cursor.execute('SELECT key, tier, credits, issued_to, created_at, expires_at FROM licenses')
+        cursor.execute('SELECT key, tier, credits, issued_to, created_at, expires_at, hwid FROM licenses')
 
     rows = cursor.fetchall()
     conn.close()
@@ -167,7 +167,8 @@ def view_keys():
         'credits': row[2],
         'issued_to': row[3],
         'created_at': row[4],
-        'expires_at': row[5]
+        'expires_at': row[5],
+        'hwid': row[6]
     } for row in rows]
 
     return jsonify({'keys': keys})
