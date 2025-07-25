@@ -158,10 +158,6 @@ def delete_key():
 
     return jsonify({'message': 'Key deleted successfully'})
 
-if __name__ == '__main__':
-    init_db()
-    app.run(debug=True, host='0.0.0.0')
-
 @app.route('/extend_key', methods=['POST'])
 def extend_key():
     data = request.get_json()
@@ -175,7 +171,6 @@ def extend_key():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # Check if the key exists
     cursor.execute('SELECT tier, credits FROM licenses WHERE key = ?', (key,))
     result = cursor.fetchone()
 
@@ -196,3 +191,7 @@ def extend_key():
     conn.close()
 
     return jsonify({"message": "Key extended successfully"})
+
+if __name__ == '__main__':
+    init_db()
+    app.run(debug=True, host='0.0.0.0')
