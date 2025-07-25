@@ -282,6 +282,31 @@ def key_stats():
         'days_since_created': days_active
     })
 
+@app.route('/reset_hwid', methods=['POST'])
+def reset_hwid():
+    data = request.get_json()
+    key = data.get('key')
+    admin_password = data.get('admin_password')
+
+    if not key or not admin_password:
+        return jsonify({'error': 'Missing key or admin password'}), 400
+
+    if admin_password != MASTER_KEY:
+        return jsonify({'error': 'Unauthorized'}), 403
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT key FROM licenses WHERE key = ?', (key,))
+    if not cursor.fetchone():
+        conn.close()
+        return jsonify({'error': 'Key not found'}), 404
+
+    cursor.execute('UPDATE licenses SET hwid = NULL WHERE key = ?', (key,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({'message': 'HWID reset successfully'})
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=True, host='0.0.0.0')
