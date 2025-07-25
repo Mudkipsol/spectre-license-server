@@ -118,51 +118,6 @@ def edit_key():
 
     return jsonify({"message": "Key updated successfully"})
 
-@app.route('/extend_key', methods=['POST'])
-def extend_key():
-    data = request.get_json()
-    key = data.get('key')
-    new_tier = data.get('tier')
-    new_credits = data.get('credits')
-    new_issued_to = data.get('issued_to')
-
-    if not key or not new_tier:
-        return jsonify({'error': "Missing 'key' or 'tier'"}), 400
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute('SELECT tier FROM licenses WHERE key = ?', (key,))
-    row = cursor.fetchone()
-
-    if not row:
-        conn.close()
-        return jsonify({'error': 'Key not found'}), 404
-
-    current_tier = row[0]
-
-    if current_tier != 'trial':
-        conn.close()
-        return jsonify({'error': 'Only trial keys can be extended'}), 403
-
-    updates = ['tier = ?']
-    params = [new_tier]
-
-    if new_credits is not None:
-        updates.append("credits = ?")
-        params.append(new_credits)
-    if new_issued_to:
-        updates.append("issued_to = ?")
-        params.append(new_issued_to)
-
-    params.append(key)
-    query = f"UPDATE licenses SET {', '.join(updates)} WHERE key = ?"
-    cursor.execute(query, params)
-    conn.commit()
-    conn.close()
-
-    return jsonify({'message': 'Trial key extended to full plan'})
-
 @app.route('/view_keys', methods=['GET'])
 def view_keys():
     tier_filter = request.args.get('tier')  # optional: /view_keys?tier=premium
@@ -206,3 +161,38 @@ def delete_key():
 if __name__ == '__main__':
     init_db()
     app.run(debug=True, host='0.0.0.0')
+
+@app.route('/extend_key', methods=['POST'])
+def extend_key():
+    data = request.get_json()
+    key = data.get('key')
+    new_tier = data.get('new_tier')
+    additional_credits = data.get('additional_credits', 0)
+
+    if not key or not new_tier:
+        return jsonify({"error": "Missing 'key' or 'new_tier'"}), 400
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # Check if the key exists
+    cursor.execute('SELECT tier, credits FROM licenses WHERE key = ?', (key,))
+    result = cursor.fetchone()
+
+    if not result:
+        conn.close()
+        return jsonify({"error": "Key not found"}), 404
+
+    current_credits = result[1]
+    updated_credits = current_credits + int(additional_credits)
+
+    cursor.execute('''
+        UPDATE licenses
+        SET tier = ?, credits = ?
+        WHERE key = ?
+    ''', (new_tier, updated_credits, key))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "Key extended successfully"})
