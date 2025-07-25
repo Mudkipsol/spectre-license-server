@@ -57,34 +57,28 @@ def verify_key():
     else:
         return jsonify({'valid': False}), 403
 
-@app.route('/generate_key', methods=['POST'])
+@app.route('/generate_key', methods=['GET', 'POST'])
 def generate_key():
-    data = request.json or {}
-    input_key = data.get('key', '').strip()
-    tier = data.get('tier', 'lite')
-    credits = int(data.get('credits', 5000))
-    issued_to = data.get('issued_to', '')
+    tier = request.args.get('tier') or request.form.get('tier')
+    credits = request.args.get('credits') or request.form.get('credits')
+    issued_to = request.args.get('issued_to') or request.form.get('issued_to')
 
-    if not input_key:
-        input_key = str(uuid.uuid4()).split('-')[0].upper() + '-' + str(uuid.uuid4()).split('-')[1].upper()
+    if not tier or not credits or not issued_to:
+        return jsonify({'error': 'Missing tier, credits, or issued_to'}), 400
 
-    if key_exists(input_key):
-        return jsonify({'success': False, 'error': 'Key already exists'}), 400
+    new_key = str(uuid.uuid4()).replace('-', '')  # Simple key format
+    created_at = datetime.utcnow().isoformat()
 
-    created_at = datetime.datetime.utcnow().isoformat()
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO licenses (key, credits, tier, issued_to, created_at) VALUES (?, ?, ?, ?, ?)',
-                   (input_key, credits, tier, issued_to, created_at))
+    cursor.execute('''
+        INSERT INTO licenses (key, tier, credits, issued_to, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (new_key, tier, int(credits), issued_to, created_at))
     conn.commit()
     conn.close()
 
-    return jsonify({
-        'success': True,
-        'key': input_key,
-        'credits': credits,
-        'tier': tier
-    })
+    return jsonify({'generated_key': new_key})
 
 @app.route('/view_keys', methods=['GET'])
 def view_keys():
