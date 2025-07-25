@@ -1,90 +1,85 @@
 from flask import Flask, request, jsonify
 import sqlite3
 import uuid
-from datetime import datetime
+import datetime
 
 app = Flask(__name__)
-DB_FILE = "licenses.db"
+
+DB_PATH = 'licenses.db'
+MASTER_KEY = 'spectre-master-7788'
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS licenses (
-            license_key TEXT PRIMARY KEY,
-            license_type TEXT,
-            telegram_username TEXT,
-            machine_id TEXT,
-            spoof_limit INTEGER,
-            spoof_count INTEGER DEFAULT 0,
-            created_at TIMESTAMP,
-            hwid_locked BOOLEAN DEFAULT 1
+            key TEXT PRIMARY KEY,
+            credits INTEGER DEFAULT 5000,
+            tier TEXT DEFAULT 'lite',
+            issued_to TEXT,
+            created_at TEXT
         )
-    """)
+    ''')
     conn.commit()
     conn.close()
 
-@app.route("/generate_trial", methods=["POST"])
-def generate_trial():
+def key_exists(key):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT 1 FROM licenses WHERE key = ?', (key,))
+    exists = cursor.fetchone() is not None
+    conn.close()
+    return exists
+
+@app.route('/')
+def index():
+    return jsonify({"status": "Spectre License API running."})
+
+@app.route('/verify', methods=['POST'])
+def verify_key():
     data = request.json
-    machine_id = data.get("machine_id")
-    telegram_username = data.get("telegram_username")
-    if not machine_id or not telegram_username:
-        return jsonify({"status": "error", "message": "Missing machine_id or telegram_username"}), 400
+    user_key = data.get('key', '').strip()
+    if user_key == MASTER_KEY:
+        return jsonify({'valid': True, 'tier': 'master', 'credits': 999999})
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT tier, credits FROM licenses WHERE key = ?', (user_key,))
+    result = cursor.fetchone()
+    conn.close()
+    if result:
+        return jsonify({'valid': True, 'tier': result[0], 'credits': result[1]})
+    else:
+        return jsonify({'valid': False}), 403
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT * FROM licenses WHERE machine_id=? OR telegram_username=?", (machine_id, telegram_username))
-    if c.fetchone():
-        conn.close()
-        return jsonify({"status": "denied", "message": "Trial already issued."}), 403
+@app.route('/generate_key', methods=['POST'])
+def generate_key():
+    data = request.json or {}
+    input_key = data.get('key', '').strip()
+    tier = data.get('tier', 'lite')
+    credits = int(data.get('credits', 5000))
+    issued_to = data.get('issued_to', '')
 
-    license_key = "TRIAL-" + uuid.uuid4().hex[:12].upper()
-    c.execute("INSERT INTO licenses (license_key, license_type, telegram_username, machine_id, spoof_limit, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-              (license_key, "trial", telegram_username, machine_id, 5, datetime.utcnow()))
+    if not input_key:
+        input_key = str(uuid.uuid4()).split('-')[0].upper() + '-' + str(uuid.uuid4()).split('-')[1].upper()
+
+    if key_exists(input_key):
+        return jsonify({'success': False, 'error': 'Key already exists'}), 400
+
+    created_at = datetime.datetime.utcnow().isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO licenses (key, credits, tier, issued_to, created_at) VALUES (?, ?, ?, ?, ?)',
+                   (input_key, credits, tier, issued_to, created_at))
     conn.commit()
     conn.close()
 
-    return jsonify({"status": "success", "license_key": license_key})
+    return jsonify({
+        'success': True,
+        'key': input_key,
+        'credits': credits,
+        'tier': tier
+    })
 
-@app.route("/check_license", methods=["POST"])
-def check_license():
-    data = request.json
-    license_key = data.get("license_key")
-    machine_id = data.get("machine_id")
-    if not license_key or not machine_id:
-        return jsonify({"status": "error", "message": "Missing license_key or machine_id"}), 400
-
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT spoof_limit, spoof_count, machine_id FROM licenses WHERE license_key=?", (license_key,))
-    row = c.fetchone()
-    conn.close()
-    if not row:
-        return jsonify({"status": "invalid", "message": "License not found"}), 404
-
-    spoof_limit, spoof_count, stored_machine_id = row
-    if stored_machine_id != machine_id:
-        return jsonify({"status": "invalid", "message": "License locked to different machine"}), 403
-    if spoof_count >= spoof_limit:
-        return jsonify({"status": "blocked", "message": "Spoof limit reached"}), 403
-
-    return jsonify({"status": "valid", "remaining_spoofs": spoof_limit - spoof_count})
-
-@app.route("/increment_spoof", methods=["POST"])
-def increment_spoof():
-    data = request.json
-    license_key = data.get("license_key")
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("UPDATE licenses SET spoof_count = spoof_count + 1 WHERE license_key=?", (license_key,))
-    conn.commit()
-    conn.close()
-    return jsonify({"status": "success", "message": "Spoof count incremented"})
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     init_db()
-    import os
-
-port = int(os.environ.get("PORT", 5000))
-app.run(host="0.0.0.0", port=port)
+    app.run(debug=True, host='0.0.0.0')
