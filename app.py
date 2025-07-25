@@ -192,6 +192,41 @@ def extend_key():
 
     return jsonify({"message": "Key extended successfully"})
 
+@app.route('/key_stats', methods=['POST'])
+def key_stats():
+    data = request.get_json()
+    license_key = data.get('key')
+
+    if not license_key:
+        return jsonify({'error': 'Missing key'}), 400
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT tier, credits, issued_to, created_at FROM licenses WHERE key = ?', (license_key,))
+    result = cursor.fetchone()
+    conn.close()
+
+    if not result:
+        return jsonify({'error': 'Key not found'}), 404
+
+    tier, credits, issued_to, created_at = result
+
+    # Calculate time since creation (optional)
+    try:
+        created_time = datetime.fromisoformat(created_at)
+        time_since = (datetime.utcnow() - created_time).days
+    except:
+        time_since = None
+
+    return jsonify({
+        'key': license_key,
+        'tier': tier,
+        'credits': credits,
+        'issued_to': issued_to,
+        'created_at': created_at,
+        'days_since_created': time_since
+    })
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=True, host='0.0.0.0')
