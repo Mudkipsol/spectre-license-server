@@ -80,6 +80,44 @@ def generate_key():
 
     return jsonify({'generated_key': new_key})
 
+@app.route('/edit_key', methods=['POST'])
+def edit_key():
+    data = request.get_json()
+    key = data.get('key')
+    new_tier = data.get('tier')
+    new_credits = data.get('credits')
+    new_issued_to = data.get('issued_to')
+
+    if not key:
+        return jsonify({"error": "Missing 'key' field"}), 400
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    updates = []
+    params = []
+
+    if new_tier:
+        updates.append("tier = ?")
+        params.append(new_tier)
+    if new_credits is not None:
+        updates.append("credits = ?")
+        params.append(new_credits)
+    if new_issued_to:
+        updates.append("issued_to = ?")
+        params.append(new_issued_to)
+
+    if not updates:
+        return jsonify({"error": "No fields to update"}), 400
+
+    params.append(key)
+    query = f"UPDATE licenses SET {', '.join(updates)} WHERE key = ?"
+    cursor.execute(query, params)
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "Key updated successfully"})
+
 @app.route('/view_keys', methods=['GET'])
 def view_keys():
     tier_filter = request.args.get('tier')  # optional: /view_keys?tier=premium
