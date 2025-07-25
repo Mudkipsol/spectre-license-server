@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
@@ -12,20 +12,18 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # Force drop the old table
+    # Drop and recreate table (if needed during dev)
     cursor.execute('DROP TABLE IF EXISTS licenses')
-
-    # Recreate the table with correct schema
     cursor.execute('''
         CREATE TABLE licenses (
             key TEXT PRIMARY KEY,
             credits INTEGER DEFAULT 5000,
             tier TEXT DEFAULT 'lite',
             issued_to TEXT,
-            created_at TEXT
+            created_at TEXT,
+            expires_at TEXT
         )
     ''')
-
     conn.commit()
     conn.close()
 
@@ -47,13 +45,18 @@ def verify_key():
     user_key = data.get('key', '').strip()
     if user_key == MASTER_KEY:
         return jsonify({'valid': True, 'tier': 'master', 'credits': 999999})
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('SELECT tier, credits FROM licenses WHERE key = ?', (user_key,))
+    cursor.execute('SELECT tier, credits, expires_at FROM licenses WHERE key = ?', (user_key,))
     result = cursor.fetchone()
     conn.close()
+
     if result:
-        return jsonify({'valid': True, 'tier': result[0], 'credits': result[1]})
+        tier, credits, expires_at = result
+        if expires_at and datetime.fromisoformat(expires_at) < datetime.utcnow():
+            return jsonify({'valid': False, 'reason': 'License expired'}), 403
+        return jsonify({'valid': True, 'tier': tier, 'credits': credits})
     else:
         return jsonify({'valid': False}), 403
 
@@ -66,15 +69,16 @@ def generate_key():
     if not tier or not credits or not issued_to:
         return jsonify({'error': 'Missing tier, credits, or issued_to'}), 400
 
-    new_key = str(uuid.uuid4()).replace('-', '')  # Simple key format
+    new_key = str(uuid.uuid4()).replace('-', '')
     created_at = datetime.utcnow().isoformat()
+    expires_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO licenses (key, tier, credits, issued_to, created_at)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (new_key, tier, int(credits), issued_to, created_at))
+        INSERT INTO licenses (key, tier, credits, issued_to, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (new_key, tier, int(credits), issued_to, created_at, expires_at))
     conn.commit()
     conn.close()
 
@@ -120,14 +124,14 @@ def edit_key():
 
 @app.route('/view_keys', methods=['GET'])
 def view_keys():
-    tier_filter = request.args.get('tier')  # optional: /view_keys?tier=premium
+    tier_filter = request.args.get('tier')
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     if tier_filter:
-        cursor.execute('SELECT key, tier, credits, issued_to, created_at FROM licenses WHERE tier = ?', (tier_filter,))
+        cursor.execute('SELECT key, tier, credits, issued_to, created_at, expires_at FROM licenses WHERE tier = ?', (tier_filter,))
     else:
-        cursor.execute('SELECT key, tier, credits, issued_to, created_at FROM licenses')
+        cursor.execute('SELECT key, tier, credits, issued_to, created_at, expires_at FROM licenses')
 
     rows = cursor.fetchall()
     conn.close()
@@ -137,7 +141,8 @@ def view_keys():
         'tier': row[1],
         'credits': row[2],
         'issued_to': row[3],
-        'created_at': row[4]
+        'created_at': row[4],
+        'expires_at': row[5]
     } for row in rows]
 
     return jsonify({'keys': keys})
@@ -170,7 +175,6 @@ def extend_key():
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
     cursor.execute('SELECT tier, credits FROM licenses WHERE key = ?', (key,))
     result = cursor.fetchone()
 
@@ -180,51 +184,70 @@ def extend_key():
 
     current_credits = result[1]
     updated_credits = current_credits + int(additional_credits)
+    new_expiry = (datetime.utcnow() + timedelta(days=30)).isoformat()
 
     cursor.execute('''
         UPDATE licenses
-        SET tier = ?, credits = ?
+        SET tier = ?, credits = ?, expires_at = ?
         WHERE key = ?
-    ''', (new_tier, updated_credits, key))
-
+    ''', (new_tier, updated_credits, new_expiry, key))
     conn.commit()
     conn.close()
 
     return jsonify({"message": "Key extended successfully"})
 
+@app.route('/check_expired_keys', methods=['GET'])
+def check_expired_keys():
+    now = datetime.utcnow().isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT key, tier, credits, issued_to, created_at, expires_at
+        FROM licenses
+        WHERE expires_at IS NOT NULL AND expires_at < ?
+    ''', (now,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    expired = [{
+        'key': row[0],
+        'tier': row[1],
+        'credits': row[2],
+        'issued_to': row[3],
+        'created_at': row[4],
+        'expires_at': row[5]
+    } for row in rows]
+
+    return jsonify({'expired_keys': expired})
+
 @app.route('/key_stats', methods=['POST'])
 def key_stats():
     data = request.get_json()
-    license_key = data.get('key')
+    key = data.get('key')
 
-    if not license_key:
+    if not key:
         return jsonify({'error': 'Missing key'}), 400
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('SELECT tier, credits, issued_to, created_at FROM licenses WHERE key = ?', (license_key,))
-    result = cursor.fetchone()
+    cursor.execute('SELECT key, tier, credits, issued_to, created_at, expires_at FROM licenses WHERE key = ?', (key,))
+    row = cursor.fetchone()
     conn.close()
 
-    if not result:
+    if not row:
         return jsonify({'error': 'Key not found'}), 404
 
-    tier, credits, issued_to, created_at = result
-
-    # Calculate time since creation (optional)
-    try:
-        created_time = datetime.fromisoformat(created_at)
-        time_since = (datetime.utcnow() - created_time).days
-    except:
-        time_since = None
+    created = datetime.fromisoformat(row[4])
+    days_active = (datetime.utcnow() - created).days
 
     return jsonify({
-        'key': license_key,
-        'tier': tier,
-        'credits': credits,
-        'issued_to': issued_to,
-        'created_at': created_at,
-        'days_since_created': time_since
+        'key': row[0],
+        'tier': row[1],
+        'credits': row[2],
+        'issued_to': row[3],
+        'created_at': row[4],
+        'expires_at': row[5],
+        'days_since_created': days_active
     })
 
 if __name__ == '__main__':
