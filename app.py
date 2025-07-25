@@ -11,8 +11,13 @@ MASTER_KEY = 'spectre-master-7788'
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+
+    # Force drop the old table
+    cursor.execute('DROP TABLE IF EXISTS licenses')
+
+    # Recreate the table with correct schema
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS licenses (
+        CREATE TABLE licenses (
             key TEXT PRIMARY KEY,
             credits INTEGER DEFAULT 5000,
             tier TEXT DEFAULT 'lite',
@@ -20,6 +25,7 @@ def init_db():
             created_at TEXT
         )
     ''')
+
     conn.commit()
     conn.close()
 
