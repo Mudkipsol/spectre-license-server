@@ -339,8 +339,8 @@ def consume_credits():
 
     return jsonify({'message': 'Credits consumed', 'remaining_credits': updated_credits})
 
-@app.route('/spoof_trial', methods=['POST'])
-def spoof_trial():
+@app.route('/spoof', methods=['POST'])
+def spoof():
     data = request.get_json()
     key = data.get('key')
     hwid = data.get('hwid')
@@ -350,29 +350,40 @@ def spoof_trial():
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    cursor.execute('SELECT tier, usage_count, hwid FROM licenses WHERE key = ?', (key,))
+    cursor.execute('SELECT tier, usage_count, hwid, expires_at FROM licenses WHERE key = ?', (key,))
     row = cursor.fetchone()
 
     if not row:
         conn.close()
         return jsonify({'error': 'Key not found'}), 404
 
-    tier, usage_count, stored_hwid = row
+    tier, usage_count, stored_hwid, expires_at = row
 
-    if tier != 'trial':
-        conn.close()
-        return jsonify({'error': 'Not a trial key'}), 403
-
+    # HWID check
     if stored_hwid and stored_hwid != hwid:
         conn.close()
         return jsonify({'error': 'HWID mismatch'}), 403
 
-    if usage_count >= 5:
+    if expires_at and datetime.fromisoformat(expires_at) < datetime.utcnow():
         conn.close()
-        return jsonify({'error': 'Trial usage limit reached'}), 403
+        return jsonify({'error': 'License expired'}), 403
 
-    # First time binding
+    # Tier usage limits
+    limits = {
+        'trial': 5,
+        'lite': 5000,
+        'premium': 25000,
+        'custom': float('inf'),
+        'master': float('inf')
+    }
+
+    limit = limits.get(tier, 0)
+
+    if usage_count >= limit:
+        conn.close()
+        return jsonify({'error': f'{tier.capitalize()} usage limit reached'}), 403
+
+    # Bind HWID on first spoof
     if not stored_hwid:
         cursor.execute('UPDATE licenses SET hwid = ? WHERE key = ?', (hwid, key))
 
@@ -381,7 +392,11 @@ def spoof_trial():
     conn.commit()
     conn.close()
 
-    return jsonify({'success': True, 'remaining_spoofs': 5 - usage_count})
+    return jsonify({
+        'success': True,
+        'tier': tier,
+        'remaining_spoofs': int(limit - usage_count - 1)
+    })
 
 if __name__ == '__main__':
     init_db()
