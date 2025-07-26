@@ -22,7 +22,8 @@ def init_db():
             issued_to TEXT,
             created_at TEXT,
             expires_at TEXT,
-            hwid TEXT
+            hwid TEXT,
+            usage_count INTEGER DEFAULT 0
         )
     ''')
     conn.commit()
@@ -337,6 +338,50 @@ def consume_credits():
     conn.close()
 
     return jsonify({'message': 'Credits consumed', 'remaining_credits': updated_credits})
+
+@app.route('/spoof_trial', methods=['POST'])
+def spoof_trial():
+    data = request.get_json()
+    key = data.get('key')
+    hwid = data.get('hwid')
+
+    if not key or not hwid:
+        return jsonify({'error': 'Missing key or HWID'}), 400
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT tier, usage_count, hwid FROM licenses WHERE key = ?', (key,))
+    row = cursor.fetchone()
+
+    if not row:
+        conn.close()
+        return jsonify({'error': 'Key not found'}), 404
+
+    tier, usage_count, stored_hwid = row
+
+    if tier != 'trial':
+        conn.close()
+        return jsonify({'error': 'Not a trial key'}), 403
+
+    if stored_hwid and stored_hwid != hwid:
+        conn.close()
+        return jsonify({'error': 'HWID mismatch'}), 403
+
+    if usage_count >= 5:
+        conn.close()
+        return jsonify({'error': 'Trial usage limit reached'}), 403
+
+    # First time binding
+    if not stored_hwid:
+        cursor.execute('UPDATE licenses SET hwid = ? WHERE key = ?', (hwid, key))
+
+    # Increment usage
+    cursor.execute('UPDATE licenses SET usage_count = usage_count + 1 WHERE key = ?', (key,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({'success': True, 'remaining_spoofs': 5 - usage_count})
 
 if __name__ == '__main__':
     init_db()
