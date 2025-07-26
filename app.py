@@ -308,6 +308,36 @@ def reset_hwid():
 
     return jsonify({'message': 'HWID reset successfully'})
 
+@app.route('/consume_credits', methods=['POST'])
+def consume_credits():
+    data = request.get_json()
+    key = data.get('key')
+    amount = data.get('amount', 1)  # default to 1 credit per use
+
+    if not key:
+        return jsonify({'error': 'Missing key'}), 400
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT credits FROM licenses WHERE key = ?', (key,))
+    result = cursor.fetchone()
+
+    if not result:
+        conn.close()
+        return jsonify({'error': 'Key not found'}), 404
+
+    current_credits = result[0]
+    if current_credits < amount:
+        conn.close()
+        return jsonify({'error': 'Insufficient credits'}), 403
+
+    updated_credits = current_credits - amount
+    cursor.execute('UPDATE licenses SET credits = ? WHERE key = ?', (updated_credits, key))
+    conn.commit()
+    conn.close()
+
+    return jsonify({'message': 'Credits consumed', 'remaining_credits': updated_credits})
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=True, host='0.0.0.0')
