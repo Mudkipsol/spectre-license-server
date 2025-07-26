@@ -23,7 +23,8 @@ def init_db():
             created_at TEXT,
             expires_at TEXT,
             hwid TEXT,
-            usage_count INTEGER DEFAULT 0
+            usage_count INTEGER DEFAULT 0,
+            last_reset TEXT
         )
     ''')
     conn.commit()
@@ -36,6 +37,40 @@ def key_exists(key):
     exists = cursor.fetchone() is not None
     conn.close()
     return exists
+
+def reset_usage_if_needed(key, conn=None):
+    own_conn = False
+    if conn is None:
+        conn = sqlite3.connect(DB_PATH)
+        own_conn = True
+
+    cursor = conn.cursor()
+    cursor.execute('SELECT tier, usage_count, last_reset FROM licenses WHERE key = ?', (key,))
+    row = cursor.fetchone()
+    if not row:
+        if own_conn:
+            conn.close()
+        return
+
+    tier, usage_count, last_reset = row
+    now = datetime.utcnow()
+
+    should_reset = False
+    if last_reset:
+        last_reset_date = datetime.fromisoformat(last_reset)
+        if tier in ['lite', 'premium'] and (now - last_reset_date).days >= 30:
+            should_reset = True
+        elif tier == 'trial' and (now - last_reset_date).days >= 1:
+            should_reset = True
+    else:
+        should_reset = True
+
+    if should_reset:
+        cursor.execute('UPDATE licenses SET usage_count = 0, last_reset = ? WHERE key = ?', (now.isoformat(), key))
+        conn.commit()
+
+    if own_conn:
+        conn.close()
 
 @app.route('/')
 def index():
@@ -349,6 +384,7 @@ def spoof():
         return jsonify({'error': 'Missing key or HWID'}), 400
 
     conn = sqlite3.connect(DB_PATH)
+    reset_usage_if_needed(key, conn)
     cursor = conn.cursor()
     cursor.execute('SELECT tier, usage_count, hwid, expires_at FROM licenses WHERE key = ?', (key,))
     row = cursor.fetchone()
